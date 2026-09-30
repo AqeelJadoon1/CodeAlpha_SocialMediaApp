@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Social App</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; background: #f0f2f5; }
+    header { background: #222; color: white; padding: 16px 24px;
+              display: flex; justify-content: space-between; align-items: center; }
+    header a, header button { color: white; margin-left: 12px; text-decoration: none; }
+    header button { background: none; border: 1px solid white; padding: 6px 12px; cursor: pointer; }
+    .wrap { max-width: 500px; margin: 24px auto; }
+    .composer { background: white; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    .composer textarea { width: 100%; box-sizing: border-box; padding: 8px; resize: vertical; }
+    .composer button { margin-top: 8px; padding: 8px 16px; background: #222; color: white;
+                        border: 0; border-radius: 4px; cursor: pointer; }
+    .post { background: white; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
+    .post .author { font-weight: bold; }
+    .post .author a { color: #222; text-decoration: none; }
+    .post .content { margin: 8px 0; }
+    .post .actions { display: flex; gap: 16px; color: #555; font-size: 14px; }
+    .post .actions button { background: none; border: none; cursor: pointer; font-size: 14px; color: #555; }
+    .liked { color: #c0392b !important; font-weight: bold; }
+    .comments { margin-top: 12px; border-top: 1px solid #eee; padding-top: 8px; }
+    .comment { font-size: 14px; margin-bottom: 4px; }
+    .comment-form { display: flex; gap: 8px; margin-top: 8px; }
+    .comment-form input { flex: 1; padding: 6px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Social App</h1>
+    <div id="user-area"></div>
+  </header>
+
+  <div class="wrap">
+    <div class="composer" id="composer" style="display:none;">
+      <textarea id="post-content" rows="3" placeholder="What's on your mind?"></textarea>
+      <br>
+      <button id="post-btn">Post</button>
+    </div>
+    <div id="feed">Loading...</div>
+  </div>
+
+  <script>
+    let me = null;
+
+    async function checkUser() {
+      const response = await fetch('/api/me');
+      me = await response.json();
+      const area = document.getElementById('user-area');
+
+      if (me) {
+        area.innerHTML = `<a href="/profile.html?id=${me.id}">${me.name}</a>`;
+        const logout = document.createElement('button');
+        logout.textContent = 'Log out';
+        logout.onclick = async () => {
+          await fetch('/api/logout', { method: 'POST' });
+          window.location.reload();
+        };
+        area.appendChild(logout);
+        document.getElementById('composer').style.display = 'block';
+      } else {
+        area.innerHTML = '<a href="/account.html">Log in / Register</a>';
+      }
+    }
+
+    async function loadFeed() {
+      const response = await fetch('/api/posts');
+      const posts = await response.json();
+      const feed = document.getElementById('feed');
+      feed.innerHTML = '';
+
+      posts.forEach(p => {
+        const el = document.createElement('div');
+        el.className = 'post';
+        el.innerHTML = `
+          <div class="author"><a href="/profile.html?id=${p.author_id}">${p.author_name}</a></div>
+          <div class="content">${escapeHtml(p.content)}</div>
+          <div class="actions">
+            <button class="like-btn ${p.liked_by_me ? 'liked' : ''}" data-id="${p.id}" data-liked="${p.liked_by_me}">
+              ❤ <span class="like-count">${p.like_count}</span>
+            </button>
+            <button class="toggle-comments" data-id="${p.id}">💬 ${p.comment_count} comments</button>
+          </div>
+          <div class="comments" id="comments-${p.id}" style="display:none;"></div>
+        `;
+        feed.appendChild(el);
+      });
+
+      wireLikeButtons();
+      wireCommentToggles();
+    }
+
+    // Prevents users from injecting HTML/scripts into posts
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    function wireLikeButtons() {
+      document.querySelectorAll('.like-btn').forEach(btn => {
+        btn.onclick = async () => {
+          if (!me) { window.location.href = '/account.html'; return; }
+          const id = btn.dataset.id;
+          const liked = btn.dataset.liked === '1' || btn.dataset.liked === 'true';
+          const method = liked ? 'DELETE' : 'POST';
+          await fetch(`/api/posts/${id}/like`, { method });
+          loadFeed(); // simplest way to refresh counts correctly
+        };
+      });
+    }
+
+    function wireCommentToggles() {
+      document.querySelectorAll('.toggle-comments').forEach(btn => {
+        btn.onclick = () => loadComments(btn.dataset.id);
+      });
+    }
+
+    async function loadComments(postId) {
+      const box = document.getElementById('comments-' + postId);
+      const isOpen = box.style.display === 'block';
+      box.style.display = isOpen ? 'none' : 'block';
+      if (isOpen) return;
+
+      const response = await fetch(`/api/posts/${postId}/comments`);
+      const comments = await response.json();
+
+      box.innerHTML = comments
+        .map(c => `<div class="comment"><b>${c.author_name}:</b> ${escapeHtml(c.content)}</div>`)
+        .join('');
+
+      if (me) {
+        box.innerHTML += `
+          <div class="comment-form">
+            <input type="text" id="comment-input-${postId}" placeholder="Write a comment...">
+            <button data-id="${postId}">Send</button>
+          </div>`;
+        box.querySelector('button').onclick = async () => {
+          const input = document.getElementById('comment-input-' + postId);
+          if (!input.value.trim()) return;
+          await fetch(`/api/posts/${postId}/comments`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: input.value })
+          });
+          input.value = '';
+          loadComments(postId); // reload this thread
+          loadFeed();           // refresh comment_count on the card
+        };
+      }
+    }
+
+    document.getElementById('post-btn').onclick = async () => {
+      const textarea = document.getElementById('post-content');
+      if (!textarea.value.trim()) return;
+      await fetch('/api/posts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: textarea.value })
+      });
+      textarea.value = '';
+      loadFeed();
+    };
+
+    checkUser().then(loadFeed);
+  </script>
+</body>
+</html>
